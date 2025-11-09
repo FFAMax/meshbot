@@ -166,6 +166,7 @@ def message_listener(packet, interface):
     global DUTYCYCLE
 
     if packet is not None and packet["decoded"].get("portnum") == "TEXT_MESSAGE_APP":
+        print ("Message received:", packet)
         message = packet["decoded"]["text"].lower()
         sender_id = packet["from"]
         logger.info(f"Message {packet['decoded']['text']} from {packet['from']}")
@@ -236,9 +237,39 @@ def message_listener(packet, interface):
             elif "#tides" in message:
                 transmission_count += 1
                 interface.sendText(tides_info, wantAck=True, destinationId=sender_id)
+            elif "ping" in message:
+                transmission_count += 1
+                interface.sendText("🟢 PONG", wantAck=True, destinationId=sender_id)
             elif "#test" in message:
                 transmission_count += 1
                 interface.sendText("🟢 ACK", wantAck=True, destinationId=sender_id)
+            elif "debug" in message:
+                print(packet)
+                transmission_count += 1
+                testreply = "From: " + str(packet["from"]) + "\n"
+                testreply = "To: " + str(packet['to']) + "\n"
+                if "hopStart" in packet:
+                    if (packet["hopStart"] - packet["hopLimit"]) == 0:
+                        testreply += "Received Directly\n"
+                    else:
+                        testreply += "Received from " + str(packet["hopStart"] - packet["hopLimit"]) + "hop(s) away\n"
+                testreply += "RX SNR: " + str(packet["rxSnr"]) + "dB (" + str(int(packet["rxSnr"] + 10 * 5)) + "%)\n"
+                testreply += "RX RSSI: " + str(packet["rxRssi"]) + " dB\n"
+                testreply += "hop_start: " + str(packet['hopStart']) + "\n"
+                testreply += "hop_limit: " + str(packet['hopLimit']) + "\n"
+                testreply += ""
+                try:
+                    nodeinfo = interface.getMyNodeInfo()
+                    testreply += "batteryLevel: " + str(nodeinfo["deviceMetrics"]["batteryLevel"]) + "\n"
+                    testreply += "voltage: " + str(nodeinfo["deviceMetrics"]["voltage"]) + "\n"
+                    testreply += "channelUtilization: " + str(nodeinfo["deviceMetrics"]["channelUtilization"]) +"\n"
+                    testreply += "airUtilTx: " + str(nodeinfo["deviceMetrics"]["airUtilTx"]) +"\n"
+                    testreply += "Uptime: " + str(nodeinfo["deviceMetrics"]["uptimeSeconds"]) +"\n"
+                except Exception as e:
+                    print ("Exception while trying fetch metrics(((")
+                    print (e)
+                    pass
+                interface.sendText(testreply, wantAck=True, destinationId=sender_id)
             elif "#tst-detail" in message:
                 transmission_count += 1
                 testreply = "🟢 ACK."
@@ -409,6 +440,27 @@ def message_listener(packet, interface):
             pass
 
 
+
+def connect_interface(args, serial_ports, ip_host):
+    while True:
+        try:
+            if args.host:
+                logger.info(f"Trying to connect to Meshtastic API host {ip_host}...")
+                interface = meshtastic.tcp_interface.TCPInterface(hostname=ip_host, noProto=False)
+            else:
+                logger.info(f"Trying to connect to serial port {serial_ports[0]}...")
+                interface = meshtastic.serial_interface.SerialInterface(serial_ports[0])
+            if not interface.isConnected:
+                print("⚠️No connection, attempting connect...")
+            if interface.isConnected:
+                print("Interface is connected.")
+                return interface
+        except Exception as e:
+            logger.error(f"Connection failed: {e}")
+            logger.info("Retrying in 10 seconds...")
+            time.sleep(10)
+
+
 # Main function
 def main():
     logger.info("Starting program.")
@@ -424,6 +476,10 @@ def main():
     parser.add_argument("--host", type=str, help="Specify meshtastic host (IP address) if using API")
 
     args = parser.parse_args()
+
+    serial_ports = []
+    ip_host = None
+    last_status = None
 
     if args.port:
         serial_ports = [args.port]
@@ -456,11 +512,11 @@ def main():
         logger.info(f"Default DB: {DBFILENAME}")
 
     logger.info(f"Press CTRL-C x2 to terminate the program")
+    logger.info(f"Trying to connect...")
 
-    if args.host:
-        interface = meshtastic.tcp_interface.TCPInterface(hostname=ip_host,noProto=False)
-    else:
-        interface = meshtastic.serial_interface.SerialInterface(serial_ports[0])
+    interface = connect_interface(args, serial_ports, ip_host)
+
+    current_status = None
     pub.subscribe(message_listener, "meshtastic.receive")
 
     # Start a separate thread for refreshing data periodically
@@ -470,7 +526,19 @@ def main():
 
     # Keep the main thread alive
     while True:
-        # time.sleep(1)
+        current_status = interface.isConnected
+        if current_status != last_status:
+            if current_status:
+                logger.info("Interface is connected.")
+                print (interface.getNode)
+                print (interface.getMyNodeInfo())
+                print (interface.getMyUser())
+                print (interface.metadata)
+                print (interface.myInfo)
+            else:
+                logger.info("Waiting for connection...")
+            last_status = current_status
+        time.sleep(1)
         continue
 
 
